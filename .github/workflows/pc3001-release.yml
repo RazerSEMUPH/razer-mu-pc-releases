@@ -1,0 +1,61 @@
+name: Publish verified PC3001
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: pc3001-release
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.repository == 'RazerSEMUPH/razer-mu-pc-releases' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Load verified private transfer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pc3001"
+          cd "$RUNNER_TEMP/pc3001"
+          python3 - <<'PY'
+          import os,json,urllib.request,subprocess,hashlib,zipfile
+          token=os.environ['GH_TOKEN']
+          url='https://api.github.com/repos/RazerSEMUPH/razer-mu-pc-releases/releases/428335172'
+          req=urllib.request.Request(url,headers={'Authorization':'Bearer '+token,'Accept':'application/vnd.github+json','User-Agent':'RazerMU-PC3001'})
+          with urllib.request.urlopen(req,timeout=30) as r:release=json.load(r)
+          assert release['draft'] and release['name']=='RAZER MU PC 2026103001 — Inventory, Party UI & Login Fix'
+          asset=next(x for x in release['assets'] if x['name']=='PC3001-transfer.zip')
+          expected='860b6cfbd31d00748a48130294f6c2b2b70c86561627748bc48880b65c2a8423'
+          assert asset['state']=='uploaded' and asset['size']==39600514 and asset['digest']=='sha256:'+expected
+          cfg='header = "Authorization: Bearer '+token+'"\nheader = "Accept: application/octet-stream"\n'
+          subprocess.run(['curl','--fail','--silent','--show-error','--location','--max-time','300','--config','-','--output','transfer.zip',asset['url']],input=cfg,text=True,check=True)
+          with open('transfer.zip','rb') as f:assert hashlib.file_digest(f,'sha256').hexdigest()==expected
+          with zipfile.ZipFile('transfer.zip') as z:
+              assert set(z.namelist())=={'transfer.json','payload.zip','publish.py'}
+              z.extractall('.')
+          print('Private transfer verified.')
+          PY
+      - name: Match the verified compression runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/pc3001"
+          curl --fail --silent --show-error --location --max-time 180 -o zlib.tar.gz https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz
+          echo 'bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16  zlib.tar.gz' | sha256sum --check
+          tar -xzf zlib.tar.gz
+          cd zlib-1.3.2
+          ./configure --prefix="$RUNNER_TEMP/pc3001/zlib-runtime"
+          make -j2
+          make install
+      - name: Reconstruct, verify and publish the exact approved package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/pc3001"
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/pc3001/zlib-runtime/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          python3 publish.py
