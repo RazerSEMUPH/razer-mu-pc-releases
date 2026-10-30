@@ -64,4 +64,16 @@ jobs:
           set -euo pipefail
           cd "$RUNNER_TEMP/pc3001"
           export LD_LIBRARY_PATH="$RUNNER_TEMP/pc3001/zlib-runtime/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          p=Path('publish.py');s=p.read_text()
+          assert hashlib.sha256(p.read_bytes()).hexdigest()=='54c5821452d157ab46c375f6f3b6157d8eb2e31466c51ee57c8a23ed90855a5b'
+          old="'--data-binary','@'+str(out/name)"
+          new="'--upload-file',str(out/name)"
+          assert s.count(old)==1
+          s=s.replace(old,new)
+          s=s.replace("  if q.returncode==0:", "  if q.returncode: print('Upload diagnostic:',name,q.returncode,q.stderr[:1500],flush=True)\n  if q.returncode==0:")
+          p.write_text(s)
+          PY
           python3 publish.py
