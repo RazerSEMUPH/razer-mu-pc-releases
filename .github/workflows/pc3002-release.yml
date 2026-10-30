@@ -1,0 +1,70 @@
+name: Publish verified PC3002
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: pc3002-release
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.repository == 'RazerSEMUPH/razer-mu-pc-releases' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Load verified private transfer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pc3002"
+          cd "$RUNNER_TEMP/pc3002"
+          python3 - <<'PY'
+          import os,json,urllib.request,subprocess,hashlib,zipfile
+          token=os.environ['GH_TOKEN']
+          url='https://api.github.com/repos/RazerSEMUPH/razer-mu-pc-releases/releases?per_page=100'
+          req=urllib.request.Request(url,headers={'Authorization':'Bearer '+token,'Accept':'application/vnd.github+json','User-Agent':'RazerMU-PC3002'})
+          with urllib.request.urlopen(req,timeout=30) as r:releases=json.load(r)
+          matches=[r for r in releases if r['draft'] and r['name']=='RAZER MU PC 2026103002 — Elf Heal & Party Buff Recovery']
+          assert len(matches)==1
+          release=matches[0]
+          assert release['draft'] and release['name']=='RAZER MU PC 2026103002 — Elf Heal & Party Buff Recovery'
+          assets={x['name']:x for x in release['assets']}
+          chunks={'PC3002-transfer-00.bin': {'size': 5000000, 'sha256': '44dfb3b07044d02b353d71477c191432ca3d4d062f7b23d3b6c2dbc26e0319cd'}, 'PC3002-transfer-01.bin': {'size': 5000000, 'sha256': '61b1a070002978ea8af0a28c233aba888413d28582677a07526056db77e2c8a0'}, 'PC3002-transfer-02.bin': {'size': 5000000, 'sha256': 'da6f3fb3d8efb6d40b68732ae1798b8cfe5dc8063765fb7804991c52dbec65ca'}, 'PC3002-transfer-03.bin': {'size': 5000000, 'sha256': 'f845c53f45073ee8d5517cebe822216c83725b57a703da99c28cc98069717ed4'}, 'PC3002-transfer-04.bin': {'size': 5000000, 'sha256': 'ae77a0741e6281b938d6350b1c92536fcad1ada2347d5e758cf452ff067c26d1'}, 'PC3002-transfer-05.bin': {'size': 5000000, 'sha256': '16dd1ff9fc774be28b8f3c8aa3c8c041bac473f3020ebcc9d2870a6f788c5136'}, 'PC3002-transfer-06.bin': {'size': 5000000, 'sha256': '6602fa33ed65772bb7dbecfb6a9e010d48d5c1b899092d8496b5431b654314b6'}, 'PC3002-transfer-07.bin': {'size': 4390901, 'sha256': '8e145ef916ce25d961e2f43fec895c34800631ac81b38ba8df403fdcf6cc07e2'}}
+          with open('transfer.zip','wb') as combined:
+              for name,meta in chunks.items():
+                  asset=assets[name]
+                  assert asset['state']=='uploaded' and asset['size']==meta['size'] and asset['digest']=='sha256:'+meta['sha256']
+                  cfg='header = "Authorization: Bearer '+token+'"\nheader = "Accept: application/octet-stream"\n'
+                  subprocess.run(['curl','--fail','--silent','--show-error','--location','--max-time','180','--config','-','--output',name,asset['url']],input=cfg,text=True,check=True)
+                  with open(name,'rb') as part:content=part.read()
+                  assert hashlib.sha256(content).hexdigest()==meta['sha256']
+                  combined.write(content)
+          with open('transfer.zip','rb') as f:assert hashlib.file_digest(f,'sha256').hexdigest()=='16f8c096db4de5d5322f36c3bbcb6198a468613b0622e9f3aa4d39a62d1eaffd'
+          with zipfile.ZipFile('transfer.zip') as z:
+              assert set(z.namelist())=={'transfer.json','payload.zip','publish.py'}
+              z.extractall('.')
+          print('Private transfer verified.')
+          PY
+      - name: Match the verified compression runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/pc3002"
+          curl --fail --silent --show-error --location --max-time 180 -o zlib.tar.gz https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz
+          echo 'bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16  zlib.tar.gz' | sha256sum --check
+          tar -xzf zlib.tar.gz
+          cd zlib-1.3.2
+          ./configure --prefix="$RUNNER_TEMP/pc3002/zlib-runtime"
+          make -j2
+          make install
+      - name: Reconstruct, verify and publish the exact approved package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/pc3002"
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/pc3002/zlib-runtime/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          python3 publish.py
