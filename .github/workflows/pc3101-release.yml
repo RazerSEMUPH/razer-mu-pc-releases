@@ -1,0 +1,57 @@
+name: Publish verified PC3101
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: pc3101-release
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.repository == 'RazerSEMUPH/razer-mu-pc-releases' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Load verified private transfer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pc3101"
+          cd "$RUNNER_TEMP/pc3101"
+          python3 - <<'PY'
+          import os,json,urllib.request,subprocess,hashlib,zipfile
+          token=os.environ['GH_TOKEN']
+          url='https://api.github.com/repos/RazerSEMUPH/razer-mu-pc-releases/releases?per_page=100'
+          req=urllib.request.Request(url,headers={'Authorization':'Bearer '+token,'Accept':'application/vnd.github+json','User-Agent':'RazerMU-PC3101'})
+          with urllib.request.urlopen(req,timeout=30) as r:releases=json.load(r)
+          matches=[r for r in releases if r['draft'] and r['name']=='RAZER MU PC 2026103101 — Helper Settings & Party Recovery']
+          assert len(matches)==1
+          release=matches[0]
+          assert release['draft'] and release['name']=='RAZER MU PC 2026103101 — Helper Settings & Party Recovery'
+          assets={x['name']:x for x in release['assets']}
+          chunks={'PC3101-transfer-00.bin': {'size': 5000000, 'sha256': 'a1e65e8f2b353d331187c9e9c190cc744c01369192cafc514089d68c505f2d56'}, 'PC3101-transfer-01.bin': {'size': 5000000, 'sha256': '8479ca570f639db969f85fa9e5989c36b561e68fe80e229082c08e4a897f1000'}, 'PC3101-transfer-02.bin': {'size': 5000000, 'sha256': 'fef36551f91d31b008ce24f345d5a0bd20b2ca780dd931af35454496f88bebe3'}, 'PC3101-transfer-03.bin': {'size': 5000000, 'sha256': '5869424c4f6ebf60745b8c205899bdb985d7d1e96b60fa7d46893d76ee2cca6d'}, 'PC3101-transfer-04.bin': {'size': 5000000, 'sha256': '412054b4aa6c88b2944c41643d7a2677bb8832b89176892bcf51aac4c33c1514'}, 'PC3101-transfer-05.bin': {'size': 5000000, 'sha256': '1bd223aaf110dc3e87bd75f7febb87238440943ac010084577ed56a9d1989eb1'}, 'PC3101-transfer-06.bin': {'size': 447550, 'sha256': '1e9b800268f5b084230c7df426926df33e6774a06a813b24296a641ceba5cdcf'}}
+          with open('transfer.zip','wb') as combined:
+              for name,meta in chunks.items():
+                  asset=assets[name]
+                  assert asset['state']=='uploaded' and asset['size']==meta['size'] and asset['digest']=='sha256:'+meta['sha256']
+                  cfg='header = "Authorization: Bearer '+token+'"\nheader = "Accept: application/octet-stream"\n'
+                  subprocess.run(['curl','--fail','--silent','--show-error','--location','--max-time','180','--config','-','--output',name,asset['url']],input=cfg,text=True,check=True)
+                  with open(name,'rb') as part:content=part.read()
+                  assert hashlib.sha256(content).hexdigest()==meta['sha256']
+                  combined.write(content)
+          with open('transfer.zip','rb') as f:assert hashlib.file_digest(f,'sha256').hexdigest()=='8c55a9e87082fd7d38bb930281695b6fec9bacf3d559b2d874cdc7061f9328b7'
+          with zipfile.ZipFile('transfer.zip') as z:
+              assert set(z.namelist())=={'transfer.json','payload.zip','publish.py'}
+              z.extractall('.')
+          print('Private transfer verified.')
+          PY
+      - name: Reconstruct, verify and publish the exact approved package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/pc3101"
+          python3 publish.py
